@@ -10,6 +10,7 @@ const esc = (v) =>
 const fmt = (n) => new Date(n).toLocaleString('zh-CN', { hour12: false });
 const needs = (e) =>
   e.photoReview ||
+  e.modelReview ||
   !e.location ||
   e.type === '待识别问题' ||
   e.department === '待复核' ||
@@ -20,6 +21,30 @@ const pill = (s) =>
   '">' +
   esc(s) +
   '</span>';
+const percent = (n) => Math.round(n * 100) + '%';
+// 各 Agent 的判断过程：结论、方法、置信度和依据
+const trace = (steps, attrs = '') =>
+  steps?.length
+    ? '<details class="trace"' + attrs + '><summary>研判过程</summary><ol>' +
+      steps
+        .map(
+          (s) =>
+            '<li><div><b>' +
+            esc(s.agent) +
+            '</b> · ' +
+            esc(s.summary) +
+            '</div><small>' +
+            esc(s.method) +
+            ' · 置信度 ' +
+            percent(s.confidence) +
+            (s.ms ? ' · 耗时 ' + s.ms + ' ms' : '') +
+            '</small><ul>' +
+            s.evidence.map((x) => '<li>' + esc(x) + '</li>').join('') +
+            '</ul></li>',
+        )
+        .join('') +
+      '</ol></details>'
+    : '';
 let key = sessionStorage.getItem('operator') || '',
   state = null,
   current = 0,
@@ -246,6 +271,16 @@ async function openEvent(id) {
               (i.geo.accuracy == null ? '' : ' · 精度约 ' + i.geo.accuracy + ' 米') +
               '</small>'
             : '') +
+          (i.inferred?.length
+            ? '<p class="inferred">模型推断了' +
+              esc(
+                i.inferred
+                  .map((f) => ({ type: '问题类型', location: '位置', urgency: '紧急等级' })[f])
+                  .join('、'),
+              ) +
+              '，请核对后在人工复核中确认</p>'
+            : '') +
+          trace(i.trace) +
           (i.mime
             ? '<details><summary>查看现场照片</summary><img class="evidence-img" data-photo="' +
               i.reportId +
@@ -305,7 +340,106 @@ async function openEvent(id) {
     img.src = url;
   }
 }
+const hours = (h) => (h >= 48 ? Math.floor(h / 24) + ' 天' : h + ' 小时');
+const eventLink = (id, label) =>
+  '<button class="linkbtn" data-open="' + id + '">' + label + '</button>';
+function briefAnalysis(b, open) {
+  if (!b.summary) return '';
+  const diff = b.reports - b.previous.reports;
+  return (
+    '<section class="analysis"><h3>研判摘要</h3><p>' +
+    esc(b.summary.text) +
+    '</p><small>' +
+    esc(b.summary.method) +
+    (b.summary.note ? ' · ' + esc(b.summary.note) : '') +
+    '</small><div class="briefgrid"><div><h4>与上期对比</h4><p>上报 ' +
+    b.reports +
+    ' 条（上期 ' +
+    b.previous.reports +
+    '，' +
+    (diff > 0 ? '+' : '') +
+    diff +
+    '）<br>事件 ' +
+    b.events.length +
+    ' 个（上期 ' +
+    b.previous.events +
+    '）<br>紧急 ' +
+    b.urgent +
+    ' 件（上期 ' +
+    b.previous.urgent +
+    '）</p></div><div><h4>地点分布</h4>' +
+    (b.hotspots.length
+      ? '<ol>' +
+        b.hotspots
+          .map(
+            (h) =>
+              '<li>' + esc(h.area) + ' · ' + h.events + ' 件 / ' + h.reports + ' 条上报</li>',
+          )
+          .join('') +
+        '</ol>'
+      : '<p class="muted">无</p>') +
+    '</div><div><h4>问题类型</h4>' +
+    (b.types.length
+      ? '<ol>' +
+        b.types.map((t) => '<li>' + esc(t.type) + ' · ' + t.events + ' 件</li>').join('') +
+        '</ol>'
+      : '<p class="muted">无</p>') +
+    '</div></div>' +
+    (b.urgentEvents.length
+      ? '<h4>紧急事项与处置建议</h4>' +
+        b.urgentEvents
+          .map(
+            (e) =>
+              '<div class="item">' +
+              eventLink(e.id, 'E-' + e.id + ' ' + esc(e.type)) +
+              ' <small>' +
+              esc(e.location || '位置待核实') +
+              ' · ' +
+              esc(e.department) +
+              ' · ' +
+              esc(e.status) +
+              '</small><p class="muted">' +
+              esc(e.basis.join('；')) +
+              '</p><p>建议：' +
+              esc(e.advice) +
+              '</p></div>',
+          )
+          .join('')
+      : '') +
+    '<h4>超时督办 <small>截至生成时</small></h4>' +
+    (b.overdue.length
+      ? b.overdue
+          .map(
+            (o) =>
+              '<div class="item overdue">' +
+              eventLink(o.id, 'E-' + o.id + ' ' + esc(o.type)) +
+              ' ' +
+              pill(o.urgency) +
+              '<small>' +
+              esc(o.stage) +
+              ' · 已等待 ' +
+              hours(o.hours) +
+              '（时限 ' +
+              hours(o.limit) +
+              '）· ' +
+              esc(o.location || '位置待核实') +
+              ' · ' +
+              esc(o.department) +
+              '</small></div>',
+          )
+          .join('')
+      : '<p class="muted">无超时事项</p>') +
+    trace(
+      b.trace,
+      ' data-key="trace-' + b.id + '"' + (open.has('trace-' + b.id) ? ' open' : ''),
+    ) +
+    '</section>'
+  );
+}
 function renderInbox() {
+  const open = new Set(
+    [...document.querySelectorAll('#inbox details[open]')].map((d) => d.dataset.key),
+  );
   $('inbox').innerHTML =
     state.inbox
       .map(
@@ -333,16 +467,20 @@ function renderInbox() {
             .map(([d, n]) => esc(d) + ' ' + n)
             .join('　') +
           '</p>' +
+          briefAnalysis(b, open) +
+          '<details data-key="events-' +
+          b.id +
+          '"' +
+          (open.has('events-' + b.id) ? ' open' : '') +
+          '><summary>时段内事件（' +
+          b.events.length +
+          '）</summary>' +
           b.events
             .map(
               (e) =>
-                '<div class="item"><button class="linkbtn" data-open="' +
-                e.id +
-                '">E-' +
-                e.id +
+                '<div class="item">' +
+                eventLink(e.id, 'E-' + e.id + ' ' + esc(e.type)) +
                 ' ' +
-                esc(e.type) +
-                '</button> ' +
                 pill(e.urgency) +
                 '<p>' +
                 esc(e.location || '位置待核实') +
@@ -355,7 +493,7 @@ function renderInbox() {
                 '</small></div>',
             )
             .join('') +
-          '</article>',
+          '</details></article>',
       )
       .join('') ||
     '<div class="panel brief empty">收件箱暂无简报。请选择统计时段生成首份简报。</div>';

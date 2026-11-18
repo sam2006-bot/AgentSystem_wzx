@@ -78,18 +78,28 @@ const placeFinders = [
     return '';
   },
 ];
-export function extractPlace(text) {
+const PLACE_KINDS = ['路口', '门牌', '地标', '道路'];
+export function locatePlace(text) {
   const segments = halfWidth(text)
     .replace(/\s+/g, '')
     .split(MARK)
     .filter(Boolean);
-  for (const find of placeFinders)
+  for (const [k, find] of placeFinders.entries())
     for (const segment of segments) {
       const place = find(segment);
-      if (place) return place;
+      if (place) return { place, kind: PLACE_KINDS[k] };
     }
-  return '';
+  return { place: '', kind: '' };
 }
+export const extractPlace = (text) => locatePlace(text).place;
+// 「门口」「路边」「这条路」这类说法不能作为位置
+export const isVaguePlace = (s) =>
+  !s ||
+  s.length < 2 ||
+  GENERIC_ROAD.test(s) ||
+  /^(?:这里|那里|这边|那边|门口|路边|路上|附近|旁边|楼下|家门口|小区门口|马路上?|我家.*)$/.test(
+    s,
+  );
 
 // ── 线索解析 ──────────────────────────────────────────────────────────
 const CLAUSE =
@@ -116,12 +126,15 @@ export const DANGER = new RegExp(
     '(?:太|非常|特别|十分|极其)危险|车.{0,3}熄火|没过膝盖|齐腰|淹没',
 );
 
-function mentions(rule, s) {
+function mention(rule, s) {
   for (const m of s.matchAll(rule.match))
     if (!NEG_BEFORE.test(s.slice(Math.max(0, m.index - 4), m.index)))
-      return true;
-  return false;
+      return m[0];
+  return '';
 }
+export const issueTypes = config.rules.map((r) => r.type);
+export const ruleOf = (type) => rules.find((r) => r.type === type) || null;
+const PLACE_SCORE = { 路口: 0.85, 门牌: 0.85, 地标: 0.85, 道路: 0.6 };
 
 export function judgeDepartment(asset, rule) {
   const owner = Object.hasOwn(config.assets, asset) ? config.assets[asset] : '';
@@ -139,7 +152,9 @@ export function judgeDepartment(asset, rule) {
       };
 }
 
-export function parseClue(input, evidence = {}) {
+// 线索解析 Agent 的规则部分。每个事项附带 basis：问题类型、位置和紧急等级
+// 各自的确定方式与可信程度，由编排层整理为判断过程。不涉及职能部门。
+export function extractIssues(input, evidence = {}) {
   const text = halfWidth(input.text);
   const clauses = text
     .split(CLAUSE)
@@ -147,21 +162,37 @@ export function parseClue(input, evidence = {}) {
     .filter(Boolean);
   const given = input.location || '';
   // 位置常写在问题之后，如「井盖丢了，位置在中山路88号门口」
-  const defaultPlace = given || clauses.map(extractPlace).find(Boolean) || '';
+  const first = given
+    ? { place: given, kind: '' }
+    : clauses.map(locatePlace).find((p) => p.place) || { place: '', kind: '' };
+  const defaultPlace = first.place;
+  // here：本句提取到的位置；inherited：同一描述中其他句子写明的位置
+  const placeBasis = (here, inherited) =>
+    given
+      ? [1, '市民填写的位置']
+      : here?.place
+        ? [PLACE_SCORE[here.kind], `描述中的${here.kind}「${here.place}」`]
+        : inherited?.place
+          ? [
+              PLACE_SCORE[inherited.kind],
+              `沿用同一描述中的${inherited.kind}「${inherited.place}」`,
+            ]
+          : [0, '未提取到位置'];
   const sources = clauses.map((clause) => ({ clause, visual: false }));
   if (evidence.text) sources.push({ clause: evidence.text, visual: true });
   const found = new Map();
   const notes = [];
   const live = [];
-  let lastPlace = defaultPlace;
+  let lastFound = first;
   let preceding = [];
   for (const { clause, visual } of sources) {
     // CLIP proposes one class for the whole frame. A differing candidate stays
     // visible as evidence; it must not create a second, unreported incident.
     if (visual && Object.hasOwn(evidence, 'candidate') && found.size) continue;
-    const place = (visual ? defaultPlace : extractPlace(clause)) || lastPlace;
-    if (!visual) lastPlace = place;
-    const location = given || place;
+    const here = visual ? null : locatePlace(clause);
+    if (here?.place) lastFound = here;
+    const inherited = visual ? first : lastFound;
+    const location = given || (visual ? defaultPlace : lastFound.place);
     const asset = (
       input.asset ||
       clause.match(/\b[A-Z]{1,5}-\d{2,8}\b/i)?.[0] ||
@@ -170,10 +201,12 @@ export function parseClue(input, evidence = {}) {
     const subject = clause.replace(REFERENCE, '');
     let matches =
       visual && evidence.candidate
-        ? rules.filter((r) => r.type === evidence.candidate)
-        : rules.filter((r) => mentions(r, subject));
+        ? rules
+            .filter((r) => r.type === evidence.candidate)
+            .map((r) => [r, ''])
+        : rules.map((r) => [r, mention(r, subject)]).filter(([, m]) => m);
     matches = matches.filter(
-      (r) => !matches.some((o) => o.suppresses?.includes(r.type)),
+      ([r]) => !matches.some(([o]) => o.suppresses?.includes(r.type)),
     );
     const keyOf = (type) => JSON.stringify([type, location, asset]);
     if (!visual && (NEGATED.test(clause) || RESOLVED.test(clause))) {
@@ -183,7 +216,7 @@ export function parseClue(input, evidence = {}) {
         // 「路灯修好了」撤销同一位置此前提到的路灯故障；
         // 「昨天已经修好了」撤销紧邻的上一处问题
         for (const key of matches.length
-          ? matches.map((r) => keyOf(r.type))
+          ? matches.map(([r]) => keyOf(r.type))
           : preceding)
           found.delete(key);
         preceding = [];
@@ -192,24 +225,30 @@ export function parseClue(input, evidence = {}) {
     }
     live.push(clause);
     const source = visual ? evidence.status : '市民描述';
-    const danger = DANGER.test(clause);
+    const danger = clause.match(DANGER)?.[0];
     if (!matches.length && danger)
       for (const key of preceding) {
         const item = found.get(key);
         if (!item) continue;
         item.urgency = '紧急';
         item.reason += '\n' + source + ' · ' + clause;
+        item.basis.urgency = `后续险情描述「${danger}」`;
       }
     if (matches.length) preceding = [];
-    for (const r of matches) {
+    for (const [r, keyword] of matches) {
       const key = keyOf(r.type);
       const prior = found.get(key);
       const urgency = danger ? '紧急' : r.urgency;
+      const urgencyBasis = danger
+        ? `险情描述「${danger}」`
+        : `「${r.type}」的默认等级`;
       const reason = source + ' · ' + clause;
       if (prior) {
         prior.reason += '\n' + reason;
-        if (levels.indexOf(urgency) > levels.indexOf(prior.urgency))
+        if (levels.indexOf(urgency) > levels.indexOf(prior.urgency)) {
           prior.urgency = urgency;
+          prior.basis.urgency = urgencyBasis;
+        }
       } else {
         found.set(key, {
           type: r.type,
@@ -217,25 +256,50 @@ export function parseClue(input, evidence = {}) {
           asset,
           urgency,
           reason,
-          ...judgeDepartment(asset, r),
+          basis: {
+            type: !visual
+              ? [0.9, `描述中的「${keyword}」`]
+              : evidence.candidate
+                ? [0.5, `图像分类候选「${r.type}」`]
+                : [
+                    evidence.status?.startsWith('模型观察') ? 0.75 : 0.6,
+                    `${evidence.status}中的「${keyword}」`,
+                  ],
+            place: placeBasis(here, inherited),
+            urgency: urgencyBasis,
+          },
         });
       }
       preceding.push(key);
     }
   }
   if (found.size) return [...found.values()];
+  const danger = live.map((c) => c.match(DANGER)?.[0]).find(Boolean);
   return [
     {
       type: '待识别问题',
       location: defaultPlace,
       asset: input.asset || '',
-      urgency: live.some((c) => DANGER.test(c)) ? '紧急' : '一般',
+      urgency: danger ? '紧急' : '一般',
       reason: notes.length
         ? '未建立故障类型 · 描述含已修复或否定表述\n' + notes.join('\n')
         : '缺少可确认的故障特征',
-      ...judgeDepartment(input.asset || '', null),
+      negated: notes.length > 0,
+      basis: {
+        type: [0, notes.length ? '描述为已修复或否定表述' : '未命中问题类型关键词'],
+        place: placeBasis(first, null),
+        urgency: danger ? `险情描述「${danger}」` : '未发现险情描述',
+      },
     },
   ];
+}
+
+// 规则版「解析 + 归属」，供紧急预警等只需快速判断的场景使用
+export function parseClue(input, evidence = {}) {
+  return extractIssues(input, evidence).map(({ basis, negated, ...issue }) => ({
+    ...issue,
+    ...judgeDepartment(issue.asset, ruleOf(issue.type)),
+  }));
 }
 
 // ── 重复合并 ──────────────────────────────────────────────────────────
@@ -409,7 +473,29 @@ export function matchEvents(issue, events, report = {}, now = Date.now()) {
   };
 }
 
-export function generateBrief(items, events, start, end) {
+// 简报的统计部分全部由程序计算；摘要先按模板生成，编排层可再交给模型润色，
+// 但模型输出的数字必须都能在这里的统计中找到。
+const HOUR = 3600000;
+function areaOf(location) {
+  if (!location) return '';
+  const p = placeOf(location);
+  if (p.crossing && p.roads.length >= 2)
+    return p.roads.slice(0, 2).join('与') + '路口';
+  return p.landmark?.name || p.roads[0] || p.text;
+}
+function top(map, n = 5) {
+  return [...map.values()]
+    .sort((a, b) => b.events - a.events || b.reports - a.reports)
+    .slice(0, n);
+}
+
+export function generateBrief(
+  items,
+  events,
+  start,
+  end,
+  { orders = [], now = Date.now() } = {},
+) {
   const rows = items.filter((i) => i.time >= start && i.time < end);
   const reports = new Set(rows.map((i) => i.reportId));
   const selected = events
@@ -431,10 +517,91 @@ export function generateBrief(items, events, start, end) {
           e.department === '待复核' ||
           e.type === '待识别问题' ||
           e.photoReview ||
+          e.modelReview ||
           !e.location,
       };
     });
-  return {
+  // 与上一个等长时段对比
+  const span = end - start;
+  const before = items.filter((i) => i.time >= start - span && i.time < start);
+  const beforeEvents = new Set(before.map((i) => i.event));
+  const previous = {
+    start: start - span,
+    end: start,
+    reports: new Set(before.map((i) => i.reportId)).size,
+    events: beforeEvents.size,
+    urgent: events.filter((e) => beforeEvents.has(e.id) && e.urgency === '紧急')
+      .length,
+  };
+  const hotspots = new Map(),
+    types = new Map();
+  for (const e of selected) {
+    const area = areaOf(e.location);
+    if (area) {
+      const h = hotspots.get(area) || { area, events: 0, reports: 0, ids: [] };
+      h.events++;
+      h.reports += e.reportIds.length;
+      h.ids.push(e.id);
+      hotspots.set(area, h);
+    }
+    const t = types.get(e.type) || { type: e.type, events: 0, reports: 0 };
+    t.events++;
+    t.reports += e.reportIds.length;
+    types.set(e.type, t);
+  }
+  // 超时督办：所有在办事件，按截至生成时的等待时长判断
+  const firstSeen = new Map();
+  for (const i of items)
+    firstSeen.set(i.event, Math.min(firstSeen.get(i.event) ?? i.time, i.time));
+  const orderOf = new Map(orders.map((o) => [o.event, o]));
+  const overdue = events
+    .filter((e) => e.status !== '已办结')
+    .flatMap((e) => {
+      const order = orderOf.get(e.id);
+      const stage = order ? '未办结' : '未派单';
+      const since = order ? order.time : firstSeen.get(e.id);
+      const limit =
+        config.sla[order ? 'closeHours' : 'dispatchHours'][e.urgency];
+      const hours = Math.floor((now - since) / HOUR);
+      return since != null && now - since > limit * HOUR
+        ? [
+            {
+              id: e.id,
+              type: e.type,
+              location: e.location,
+              urgency: e.urgency,
+              department: e.department,
+              stage,
+              hours,
+              limit,
+            },
+          ]
+        : [];
+    })
+    .sort(
+      (a, b) =>
+        levels.indexOf(b.urgency) - levels.indexOf(a.urgency) ||
+        b.hours - a.hours,
+    )
+    .slice(0, 20);
+  const urgentEvents = selected
+    .filter((e) => e.urgency === '紧急')
+    .map((e) => {
+      const lines = items
+        .filter((i) => i.event === e.id)
+        .flatMap((i) => i.reason.split('\n'));
+      const risky = [...new Set(lines.filter((l) => DANGER.test(l)))];
+      return {
+        id: e.id,
+        type: e.type,
+        location: e.location,
+        department: e.department,
+        status: e.status,
+        basis: risky.length ? risky.slice(0, 2) : lines.slice(0, 1),
+        advice: ruleOf(e.type)?.advice || '请尽快核实现场情况并派单',
+      };
+    });
+  const body = {
     start,
     end,
     reports: reports.size,
@@ -446,7 +613,65 @@ export function generateBrief(items, events, start, end) {
         selected.filter((e) => e.department === d).length,
       ]),
     ),
-    urgent: selected.filter((e) => e.urgency === '紧急').length,
+    urgent: urgentEvents.length,
     review: selected.filter((e) => e.review).length,
+    previous,
+    hotspots: top(hotspots),
+    types: top(types),
+    overdue,
+    urgentEvents,
+    generatedAt: now,
   };
+  body.summary = { text: briefText(body), method: '规则模板' };
+  return body;
+}
+
+export function briefText(b) {
+  const out = [];
+  const diff = b.reports - b.previous.reports;
+  out.push(
+    `本期共收到 ${b.reports} 条上报，归并为 ${b.events.length} 个独立事件，其中补充线索 ${b.supplements} 条` +
+      (b.previous.reports
+        ? `；上报量较上期 ${b.previous.reports} 条` +
+          (diff > 0 ? `增加 ${diff} 条` : diff < 0 ? `减少 ${-diff} 条` : '持平')
+        : '；上期无上报') +
+      '。',
+  );
+  out.push(
+    b.urgentEvents.length
+      ? `紧急事件 ${b.urgentEvents.length} 件：` +
+          b.urgentEvents
+            .map(
+              (e) =>
+                `E-${e.id} ${e.type}（${e.location || '位置待核实'}，${e.status}），建议${e.advice}`,
+            )
+            .join('；') +
+          '。'
+      : '本期无紧急事件。',
+  );
+  const hot = b.hotspots.filter((h) => h.events >= 2);
+  out.push(
+    hot.length
+      ? '高发地点：' +
+          hot.map((h) => `${h.area} ${h.events} 件`).join('、') +
+          '，建议安排集中排查。'
+      : '暂无同一地点多发的问题。',
+  );
+  if (b.types.length)
+    out.push(
+      '主要问题类型：' +
+        b.types
+          .slice(0, 3)
+          .map((t) => `${t.type} ${t.events} 件`)
+          .join('、') +
+        '。',
+    );
+  const waiting = b.overdue.filter((o) => o.stage === '未派单').length;
+  out.push(
+    b.overdue.length
+      ? `截至生成时，超时未派单 ${waiting} 件、超时未办结 ${b.overdue.length - waiting} 件，请优先督办。`
+      : '截至生成时，无超时未派单或未办结的事件。',
+  );
+  if (b.review) out.push(`另有 ${b.review} 件需人工复核。`);
+  return out.join('');
 }
