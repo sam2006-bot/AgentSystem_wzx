@@ -7,6 +7,7 @@ import {
   matchEvents,
   generateBrief,
 } from './agents.mjs';
+import { cleanGeo, readExifGps } from './evidence.mjs';
 
 export class Store {
   constructor(filename) {
@@ -32,6 +33,8 @@ export class Store {
       )
     )
       this.db.exec('ALTER TABLE events ADD COLUMN manualType TEXT');
+    if (!this.all('PRAGMA table_info(reports)').some((c) => c.name === 'dhash'))
+      this.db.exec('ALTER TABLE reports ADD COLUMN dhash TEXT');
   }
   one(sql, ...args) {
     return this.db.prepare(sql).get(...args);
@@ -68,7 +71,7 @@ export class Store {
   }
   items() {
     return this.all(
-      `SELECT i.*,r.time,r.hash,r.mime,r.evidence FROM items i JOIN reports r ON r.id=i.reportId ORDER BY i.id`,
+      `SELECT i.*,r.time,r.hash,r.dhash,r.mime,r.evidence FROM items i JOIN reports r ON r.id=i.reportId ORDER BY i.id`,
     ).map(({ analysis, evidence, ...row }) => ({
       ...row,
       ...JSON.parse(analysis),
@@ -87,6 +90,12 @@ export class Store {
       .map((e) => {
         const data = grouped.get(e.id),
           first = data[0];
+        // 早期版本只保存候选事件编号
+        const matches = JSON.parse(e.candidates)
+          .map((c) =>
+            typeof c === 'number' ? { id: c, score: null, reasons: [] } : c,
+          )
+          .filter((c) => active.has(c.id));
         const urgency =
           levels[Math.max(...data.map((i) => levels.indexOf(i.urgency)))];
         return {
@@ -94,12 +103,19 @@ export class Store {
           type: e.manualType || first.type,
           asset: data.find((i) => i.asset)?.asset || '',
           location: e.location || data.find((i) => i.location)?.location || '',
+          // 管理员确认过位置时以确认结果为准
+          places: e.location
+            ? [e.location]
+            : [...new Set(data.map((i) => i.location).filter(Boolean))],
           department: e.department || first.department,
-          candidates: JSON.parse(e.candidates).filter((id) => active.has(id)),
+          candidates: matches.map((c) => c.id),
+          matches,
           urgency: e.manualUrgency || urgency,
           count: new Set(data.map((i) => i.reportId)).size,
           last: Math.max(...data.map((i) => i.time)),
           hashes: data.map((i) => i.hash).filter(Boolean),
+          dhashes: data.map((i) => i.dhash).filter(Boolean),
+          coords: data.map((i) => i.geo).filter(Boolean),
           photoReview:
             !e.reviewed &&
             data.some(
@@ -141,22 +157,37 @@ export class Store {
       const hash = photo
         ? createHash('sha256').update(photo.bytes).digest('hex')
         : null;
+      // 感知哈希由市民端浏览器解码图片后计算，原图重新压缩后仍然接近
+      const dhash =
+        photo && /^[0-9a-f]{16}$/.test(input.dhash || '') ? input.dhash : null;
+      const geo =
+        (photo && readExifGps(photo.bytes)) || cleanGeo(input.geo) || null;
       const reportId = Number(
         this.run(
-          'INSERT INTO reports(time,requestId,text,photo,mime,hash,evidence) VALUES(?,?,?,?,?,?,?)',
+          'INSERT INTO reports(time,requestId,text,photo,mime,hash,dhash,evidence) VALUES(?,?,?,?,?,?,?,?)',
           now,
           input.requestId || null,
           input.text || '',
           photo?.bytes || null,
           photo?.mime || null,
           hash,
+          dhash,
           JSON.stringify(evidence),
         ).lastInsertRowid,
       );
       const ids = [];
       const history = this.events();
-      for (const issue of parseClue(input, evidence)) {
-        const match = matchEvents(issue, history, hash, now);
+      const issues = parseClue(input, evidence);
+      // 一条上报含多个不同位置时，无法确定坐标对应哪一处
+      const located =
+        new Set(issues.map((i) => i.location)).size === 1 ? geo : null;
+      for (const issue of issues) {
+        const match = matchEvents(
+          issue,
+          history,
+          { hash, dhash, geo: located },
+          now,
+        );
         const id =
           match.target ||
           Number(
@@ -170,20 +201,31 @@ export class Store {
           'INSERT INTO items(event,reportId,analysis,supplement) VALUES(?,?,?,?)',
           id,
           reportId,
-          JSON.stringify(issue),
+          JSON.stringify({ ...issue, geo: located, link: match.link }),
           match.target ? 1 : 0,
         );
         if (match.target && photo)
           this.run('UPDATE events SET reviewed=0 WHERE id=?', id);
         if (match.target && issue.urgency === '紧急')
           this.run('UPDATE events SET manualUrgency=NULL WHERE id=?', id);
+        const pct = (n) => Math.round(n * 100) + '%';
         this.record(
           id,
           match.target
             ? '关联补充线索 #' +
                 reportId +
-                ' · 设施、精确点位或原图与在办事件匹配'
-            : '建立事件 · 线索 #' + reportId,
+                ' · 相似度 ' +
+                pct(match.link.score) +
+                ' · ' +
+                match.link.reasons.join('、')
+            : '建立事件 · 线索 #' +
+                reportId +
+                (match.candidates.length
+                  ? ' · 疑似重复 ' +
+                    match.candidates
+                      .map((c) => 'E-' + c.id + '（' + pct(c.score) + '）')
+                      .join('、')
+                  : ''),
         );
         ids.push(id);
       }

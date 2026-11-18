@@ -5,7 +5,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Store } from './store.mjs';
 import { parseClue, config } from './agents.mjs';
-import { analyzePhoto, decodePhoto } from './evidence.mjs';
+import { analyzePhoto, cleanGeo, decodePhoto } from './evidence.mjs';
 
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
 const assets = {
@@ -72,7 +72,12 @@ export function makeServer(db, key, vision = analyzePhoto) {
           location: field(input, 'location', 150),
           asset: field(input, 'asset', 50),
           requestId: field(input, 'requestId', 100),
+          dhash: field(input, 'dhash', 16).toLowerCase(),
+          geo: input.geo == null ? null : cleanGeo(input.geo),
         };
+        if (clue.dhash && !/^[0-9a-f]{16}$/.test(clue.dhash))
+          throw Error('图片指纹格式不正确');
+        if (input.geo != null && !clue.geo) throw Error('定位数据无效');
         if (!clue.text && !input.image)
           throw Error('请填写现场描述或上传现场图片');
         const previous = db.receipt(clue.requestId);
@@ -97,7 +102,9 @@ export function makeServer(db, key, vision = analyzePhoto) {
       if (auth.length !== expected.length || !timingSafeEqual(auth, expected))
         return send(res, 401, { error: '请输入本机管理员口令' });
       if (method === 'GET' && p === '/api/state') {
-        const events = db.events().map(({ hashes, ...e }) => e);
+        const events = db
+          .events()
+          .map(({ hashes, dhashes, coords, places, ...e }) => e);
         return send(res, 200, {
           events,
           inbox: db.inbox(),
