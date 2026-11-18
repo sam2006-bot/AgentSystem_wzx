@@ -171,18 +171,25 @@ async function openEvent(id) {
     '</select></div></div><label for="place">确认位置</label><input id="place" maxlength="150" required value="' +
     esc(e.location) +
     '"><div class="actions"><button class="secondary">确认现场证据及事件独立性</button></div></form></details>';
-  const candidates = e.candidates
+  const pct = (n) => Math.round(n * 100) + '%';
+  const candidates = (e.matches || [])
     .map(
-      (id) =>
-        '<div class="wrap"><span>疑似与 E-' +
-        id +
-        ' 重复</span><button class="linkbtn" data-open="' +
-        id +
+      (c) =>
+        '<div class="wrap candidate"><span>疑似与 E-' +
+        c.id +
+        ' 重复' +
+        (c.score == null ? '' : ' · 相似度 ' + pct(c.score)) +
+        '</span><button class="linkbtn" data-open="' +
+        c.id +
         '">查看候选</button><button class="quiet" data-action="merge" data-target="' +
-        id +
+        c.id +
         '">合并至 E-' +
-        id +
-        '</button></div>',
+        c.id +
+        '</button>' +
+        (c.reasons?.length
+          ? '<small class="muted">依据：' + esc(c.reasons.join('、')) + '</small>'
+          : '') +
+        '</div>',
     )
     .join('');
   $('detail').innerHTML =
@@ -222,6 +229,23 @@ async function openEvent(id) {
           '</small><p class="muted">' +
           esc(i.reason) +
           '</p>' +
+          (i.supplement && i.link
+            ? '<p class="muted">自动关联 · 相似度 ' +
+              pct(i.link.score) +
+              ' · ' +
+              esc(i.link.reasons.join('、')) +
+              '</p>'
+            : '') +
+          (i.geo
+            ? '<small>坐标 ' +
+              i.geo.lat +
+              ', ' +
+              i.geo.lng +
+              ' · ' +
+              esc(i.geo.source) +
+              (i.geo.accuracy == null ? '' : ' · 精度约 ' + i.geo.accuracy + ' 米') +
+              '</small>'
+            : '') +
           (i.mime
             ? '<details><summary>查看现场照片</summary><img class="evidence-img" data-photo="' +
               i.reportId +

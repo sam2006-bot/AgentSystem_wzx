@@ -93,3 +93,34 @@ test('市民图文提交，证据受保护，管理员收件及并行派单防�
   ).json();
   assert.equal(state.inbox[0].id, brief.id);
 });
+
+test('上报接口校验定位和图片指纹', async (t) => {
+  const db = new Store(':memory:');
+  const server = makeServer(db, 'operator', async () => ({
+    status: '无图片',
+    text: '',
+  }));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const post = (data) =>
+    fetch('http://127.0.0.1:' + server.address().port + '/api/reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: '人民路路灯不亮', ...data }),
+    });
+  assert.equal((await post({ geo: { lat: 'x', lng: 1 } })).status, 400);
+  assert.equal((await post({ geo: { lat: 91, lng: 1 } })).status, 400);
+  assert.equal((await post({ dhash: 'not-a-hash' })).status, 400);
+  const ok = await post({
+    geo: { lat: 30.27415, lng: 120.15515, accuracy: 12.4 },
+    dhash: 'F0E1D2C3B4A59687',
+  });
+  assert.equal(ok.status, 201);
+  const { events } = await ok.json();
+  assert.deepEqual(db.detail(events[0]).items[0].geo, {
+    lat: 30.27415,
+    lng: 120.15515,
+    accuracy: 12,
+    source: '浏览器定位',
+  });
+});

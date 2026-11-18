@@ -190,6 +190,31 @@ textarea {
   resize: vertical;
   min-height: 100px;
 }
+label.check {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-weight: 500;
+}
+label.check input {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 0;
+  accent-color: #15624e;
+}
+label.check small {
+  margin-left: 0;
+  color: #61736a;
+}
+.candidate {
+  padding: 8px 0;
+  border-top: 1px dashed #d6e0d9;
+}
+.candidate small {
+  flex-basis: 100%;
+}
 input::placeholder,
 textarea::placeholder {
   color: #79877f;
