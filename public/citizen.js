@@ -1,15 +1,30 @@
+import { ErrorSummary, initAll } from '/vendor/govuk/govuk-frontend.min.js';
+
+initAll();
 const $ = (id) => document.getElementById(id);
+// GOV.UK 上传组件初始化后，id="photo" 归属替代按钮，原文件输入框改为 photo-input
 const form = $('report'),
-  photo = $('photo'),
-  status = $('status');
+  photo = form.querySelector('input[type=file]'),
+  status = $('status'),
+  title = document.title;
+const esc = (v) =>
+  String(v ?? '').replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
+        c
+      ],
+  );
+const MAX_PHOTO = 5 * 1024 * 1024;
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 let previewURL = '',
   requestId = '';
 form.addEventListener('input', () => {
   requestId = '';
-  status.textContent = '';
 });
 function preview() {
   if (previewURL) URL.revokeObjectURL(previewURL);
+  previewURL = '';
   const file = photo.files[0];
   $('preview').hidden = !file;
   if (file) {
@@ -17,17 +32,89 @@ function preview() {
     $('thumb').src = previewURL;
   }
 }
-photo.onchange = preview;
+photo.addEventListener('change', preview);
 $('remove').onclick = () => {
   photo.value = '';
   requestId = '';
-  preview();
+  // 通知 GOV.UK 上传组件刷新「未选择照片」状态
+  photo.dispatchEvent(new Event('change'));
+  $('photo').focus();
 };
+
+// 错误提示遵循 GOV.UK 规范：页面顶部列出错误摘要，对应字段旁显示具体原因
+const inputClass = {
+  description: 'govuk-textarea--error',
+  photo: 'govuk-file-upload--error',
+};
+function clearErrors() {
+  $('errors').innerHTML = '';
+  document.title = title;
+  for (const el of form.querySelectorAll('.govuk-error-message')) el.remove();
+  for (const group of form.querySelectorAll('.govuk-form-group--error'))
+    group.classList.remove('govuk-form-group--error');
+  for (const [id, cls] of Object.entries(inputClass)) {
+    const input = $(id);
+    input.classList.remove(cls);
+    input.setAttribute(
+      'aria-describedby',
+      input
+        .getAttribute('aria-describedby')
+        .replace(' ' + id + '-error', ''),
+    );
+  }
+}
+// errors：[{ field?, text }]，field 为字段 id
+function showErrors(errors) {
+  clearErrors();
+  for (const { field, text } of errors) {
+    if (!field) continue;
+    const input = $(field);
+    input.closest('.govuk-form-group').classList.add('govuk-form-group--error');
+    input.classList.add(inputClass[field]);
+    const message = document.createElement('p');
+    message.id = field + '-error';
+    message.className = 'govuk-error-message';
+    message.innerHTML =
+      '<span class="govuk-visually-hidden">错误：</span>' + esc(text);
+    (input.closest('.govuk-file-upload-wrapper') || input).before(message);
+    input.setAttribute(
+      'aria-describedby',
+      input.getAttribute('aria-describedby') + ' ' + message.id,
+    );
+  }
+  $('errors').innerHTML =
+    '<div class="govuk-error-summary" data-module="govuk-error-summary"><div role="alert"><h2 class="govuk-error-summary__title">提交前请修改以下问题</h2><div class="govuk-error-summary__body"><ul class="govuk-list govuk-error-summary__list">' +
+    errors
+      .map(
+        ({ field, text }) =>
+          '<li>' +
+          (field
+            ? '<a href="#' + field + '">' + esc(text) + '</a>'
+            : esc(text)) +
+          '</li>',
+      )
+      .join('') +
+    '</ul></div></div></div>';
+  document.title = '错误：' + title;
+  new ErrorSummary($('errors').firstElementChild);
+}
+function validate(file, text) {
+  const errors = [];
+  if (!file && !text)
+    errors.push({ field: 'description', text: '请描述问题，或上传一张现场照片' });
+  if (text.length > 3000)
+    errors.push({ field: 'description', text: '问题描述不能超过 3000 字' });
+  if (file && !PHOTO_TYPES.includes(file.type))
+    errors.push({ field: 'photo', text: '现场照片须为 JPG、PNG 或 WebP 格式' });
+  else if (file && file.size > MAX_PHOTO)
+    errors.push({ field: 'photo', text: '现场照片不能超过 5 MB' });
+  return errors;
+}
 function asDataURL(file) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(r.result);
-    r.onerror = () => reject(Error('图片读取失败'));
+    r.onerror = () => reject(Error('照片读取失败，请重新选择'));
     r.readAsDataURL(file);
   });
 }
@@ -86,14 +173,9 @@ form.onsubmit = async (ev) => {
   ev.preventDefault();
   const file = photo.files[0],
     text = $('description').value.trim();
-  if (!file && !text) {
-    status.textContent = '请填写问题描述或选择现场照片';
-    return;
-  }
-  if (file && file.size > 5 * 1024 * 1024) {
-    status.textContent = '请选择 5 MB 以内的图片';
-    return;
-  }
+  const errors = validate(file, text);
+  if (errors.length) return showErrors(errors);
+  clearErrors();
   requestId ||= crypto.randomUUID();
   const controls = [...form.elements];
   controls.forEach((e) => (e.disabled = true));
@@ -103,7 +185,7 @@ form.onsubmit = async (ev) => {
       status.textContent = '正在获取定位…';
       geo = await locate();
     }
-    status.textContent = file ? '正在读取图片并研判…' : '正在提交…';
+    status.textContent = file ? '正在上传照片…' : '正在提交…';
     const res = await fetch('/api/reports', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -117,21 +199,28 @@ form.onsubmit = async (ev) => {
         geo,
       }),
     });
-    const result = await res.json();
-    if (!res.ok) throw Error(result.error);
-    $('receiptText').textContent =
-      '线索 #' +
-      result.reportId +
-      ' 已受理，关联事件 ' +
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw Error(result.error || '提交失败，请稍后重试');
+    $('receiptId').textContent = '#' + result.reportId;
+    $('receiptEvents').textContent =
+      '你报告的问题已记录为事件 ' +
       result.events.map((i) => 'E-' + i).join('、') +
       '。';
-    $('receipt').hidden = false;
-    form.reset();
+    $('reportView').hidden = true;
+    $('doneView').hidden = false;
+    document.title = '问题已提交 - 城市设施服务站';
+    $('doneTitle').focus();
     preview();
-    requestId = '';
-    status.textContent = '提交成功';
   } catch (error) {
-    status.textContent = error.message;
+    status.textContent = '';
+    showErrors([
+      {
+        text:
+          error instanceof TypeError
+            ? '无法连接服务，请检查网络后重试'
+            : error.message,
+      },
+    ]);
   } finally {
     controls.forEach((e) => (e.disabled = false));
   }

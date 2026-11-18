@@ -1,0 +1,120 @@
+/* 在 GOV.UK Frontend 与 MOJ Frontend 之上的少量项目样式，类名统一用 app- 前缀 */
+
+/* 中文行距：GOV.UK 的行高按拉丁字母设计，中文正文需要略松一些 */
+.govuk-body,
+.govuk-body-l,
+.govuk-body-s,
+.govuk-hint,
+.govuk-list,
+.govuk-inset-text,
+.govuk-warning-text__text,
+.govuk-summary-list__key,
+.govuk-summary-list__value,
+.govuk-details__text,
+.govuk-panel__body {
+  line-height: 1.6;
+}
+
+/* 外观像链接的按钮，用于不跳转页面的次要操作 */
+.app-link-button {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--govuk-link-colour);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: max(1px, 0.0625rem);
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+.app-link-button:hover {
+  color: var(--govuk-link-hover-colour);
+  text-decoration-thickness: max(3px, 0.1875rem);
+}
+.app-link-button:focus {
+  outline: 3px solid transparent;
+  color: var(--govuk-focus-text-colour);
+  background-color: var(--govuk-focus-colour);
+  box-shadow:
+    0 -2px var(--govuk-focus-colour),
+    0 4px var(--govuk-focus-text-colour);
+  text-decoration: none;
+}
+.app-link-button:disabled {
+  color: var(--govuk-secondary-text-colour);
+  cursor: default;
+}
+
+/* 市民上报：已选照片预览 */
+.app-photo-preview {
+  margin-top: 15px;
+}
+.app-photo-preview img {
+  display: block;
+  max-width: 240px;
+  max-height: 180px;
+  margin-bottom: 10px;
+  border: 1px solid var(--govuk-border-colour);
+}
+
+/* 管理工作台 */
+.app-service-navigation__action {
+  margin-left: auto;
+}
+.app-service-navigation__action .app-link-button {
+  color: var(--govuk-link-colour);
+  font-weight: 700;
+}
+.app-table-wrap {
+  overflow-x: auto;
+}
+.app-nowrap {
+  white-space: nowrap;
+}
+.app-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 15px;
+}
+.app-filter .govuk-label {
+  margin-bottom: 0;
+}
+.app-evidence-photo {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  margin-bottom: 10px;
+  border: 1px solid var(--govuk-border-colour);
+}
+.app-trace > li + li {
+  margin-top: 10px;
+}
+.app-trace .govuk-list {
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+.app-timeline .moj-timeline__description {
+  word-break: break-word;
+}
+.app-width-container--wide {
+  max-width: 1200px;
+}
+.app-pre-line {
+  white-space: pre-line;
+}
+.app-focus-target:focus {
+  outline: none;
+}
+.app-table .govuk-table__header,
+.app-table .govuk-table__cell {
+  font-size: 1rem;
+}
+.app-table--wide {
+  min-width: 720px;
+}
+.app-table .govuk-tag,
+.app-table .moj-badge {
+  white-space: nowrap;
+}
