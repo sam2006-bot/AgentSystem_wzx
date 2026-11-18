@@ -14,8 +14,11 @@ import {
   ruleOf,
   issueTypes,
   isVaguePlace,
+  hasCitizenDescription,
+  briefText,
 } from './agents.mjs';
 import { chatJSON } from './llm.mjs';
+import { inconclusivePhoto } from './evidence.mjs';
 
 export const AGENTS = {
   parser: {
@@ -273,11 +276,16 @@ export async function prepareReport(input, evidence = {}, llm = {}) {
   const missing = gaps(issues);
   const keep = (notes) =>
     finish(issues.map((issue) => ({ issue, method: '规则', notes })));
+  const uncertain = inconclusivePhoto(evidence);
+  const observation = uncertain ? '' : evidence.text;
+  if (uncertain && !hasCitizenDescription(input))
+    return keep(['照片缺少可确认的故障证据，保留原图待人工核图']);
   if (!missing.length) return keep([]);
   if (!llm.model)
     return keep([`规则未能确定${missing.join('和')}，未配置文本模型，交人工核实`]);
-  const source = halfWidth([input.text, evidence.text].filter(Boolean).join('\n'))
-    .replace(/\s+/g, '');
+  const source = halfWidth(
+    [input.text, observation].filter(Boolean).join('\n'),
+  ).replace(/\s+/g, '');
   if (!source) return keep([]);
   const started = Date.now();
   try {
@@ -291,7 +299,7 @@ export async function prepareReport(input, evidence = {}, llm = {}) {
         issueTypes.join('、') +
         '\n市民描述：' +
         (input.text || '（无）') +
-        (evidence.text ? '\n图像观察：' + evidence.text : '') +
+        (observation ? '\n图像观察：' + observation : '') +
         (input.location ? '\n市民填写的位置：' + input.location : ''),
     });
     const merged = mergeProposals(
@@ -349,7 +357,7 @@ export function briefStep(body) {
         '统计数字由程序按上报时间计算',
         body.summary.method === '规则模板'
           ? '摘要按模板生成'
-          : '摘要由模型撰写，其中的数字均已与统计核对',
+          : '模型选取重点事件；编号、地点、类型已逐项核对，数字由程序填入',
         ...(body.summary.note ? [body.summary.note] : []),
       ],
     },
@@ -357,52 +365,9 @@ export function briefStep(body) {
   );
 }
 
-const BRIEF_SYSTEM = `你是城市公共设施值班研判助手，根据给定的统计数据撰写简报摘要。
-1. 用 3 至 5 句话概括本期整体情况、紧急风险、高发地点与类型、超时督办事项，并给出处置建议。事件数不少于 2 的地点才算高发地点。
-2. 只能使用数据中出现的数字，不要自行计算百分比、增减幅度或推测数量；数字一律使用阿拉伯数字。
-3. 提到事件时使用数据中的编号，例如 E-3。
-4. 不要编造数据中没有的地点、事件或原因。`;
-const time = (t) => new Date(t).toLocaleString('zh-CN', { hour12: false });
-
-function briefFacts(b) {
-  return {
-    统计时段: time(b.start) + ' 至 ' + time(b.end),
-    上报条数: b.reports,
-    独立事件: b.events.length,
-    补充线索: b.supplements,
-    上期: {
-      上报条数: b.previous.reports,
-      独立事件: b.previous.events,
-      紧急事件: b.previous.urgent,
-    },
-    较上期上报增减: b.reports - b.previous.reports,
-    紧急事件: b.urgentEvents.map((e) => ({
-      编号: 'E-' + e.id,
-      类型: e.type,
-      位置: e.location || '位置待核实',
-      状态: e.status,
-      依据: e.basis,
-      建议: e.advice,
-    })),
-    地点分布: b.hotspots.map((h) => ({
-      地点: h.area,
-      事件数: h.events,
-      上报数: h.reports,
-    })),
-    问题类型: b.types.map((t) => ({ 类型: t.type, 事件数: t.events })),
-    超时事项: b.overdue.map((o) => ({
-      编号: 'E-' + o.id,
-      类型: o.type,
-      位置: o.location || '位置待核实',
-      环节: o.stage,
-      已等待小时: o.hours,
-      时限小时: o.limit,
-    })),
-    待复核: b.review,
-    部门分布: b.departments,
-  };
-}
-
+const BRIEF_SYSTEM = `为值班管理员从本期事件中选出最多 3 个优先关注的事件，按优先级排序。
+优先考虑紧急、待复核和超时事项。将所选事件的 id、location、type 从同一条记录逐字复制到 focus。
+不得补写地点或故障名称。统计和摘要正文由系统生成。`;
 // 摘要中的每个数字都必须出现在统计数据里；中文数字和百分比一律不接受。
 // 统计时段的日期时间不参与核对，以免时间里的数字被当作统计数字放行。
 const DATE_TIME =
@@ -425,10 +390,9 @@ export function checkSummary(text, facts) {
   return extra ? `摘要含统计中没有的数字「${extra}」` : '';
 }
 
-// 请模型改写摘要；校验不通过时保留模板摘要并记录原因
+// 模型只选择重点。逐项核对通过后，由程序从快照生成正文。
 export async function narrateBrief(brief, llm = {}) {
-  if (!llm.model) return brief;
-  const facts = briefFacts(brief);
+  if (!llm.model || !brief.events.length) return brief;
   let note;
   try {
     const out = await chatJSON({
@@ -437,26 +401,60 @@ export async function narrateBrief(brief, llm = {}) {
       system: BRIEF_SYSTEM,
       schema: {
         type: 'object',
-        properties: { summary: { type: 'string' } },
-        required: ['summary'],
-      },
-      prompt: JSON.stringify(facts),
-    });
-    const text = typeof out?.summary === 'string' ? out.summary.trim() : '';
-    note = checkSummary(text, facts);
-    if (!note) {
-      const body = {
-        ...brief,
-        summary: {
-          text,
-          method: '规则统计 + 模型 ' + llm.model + ' 撰写摘要',
-          template: brief.summary.text,
+        properties: {
+          focus: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 3,
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'integer' },
+                location: { type: 'string' },
+                type: { type: 'string' },
+              },
+              required: ['id', 'location', 'type'],
+            },
+          },
         },
-      };
-      return { ...body, trace: [briefStep(body)] };
+        required: ['focus'],
+      },
+      prompt: JSON.stringify({
+        events: brief.events.map(
+          ({ id, location, type, urgency, status, review }) => ({
+            id,
+            location,
+            type,
+            urgency,
+            status,
+            review,
+          }),
+        ),
+        overdue: brief.overdue.map((e) => e.id),
+      }),
+    });
+    if (!Array.isArray(out?.focus) || !out.focus.length || out.focus.length > 3)
+      throw Error('模型未按格式返回重点事件');
+    const focus = [];
+    for (const row of out.focus) {
+      const event = brief.events.find((e) => e.id === row?.id);
+      if (!event || event.location !== row.location || event.type !== row.type)
+        throw Error('重点事件的编号、位置或类型与简报快照不符');
+      if (focus.includes(event)) throw Error('重点事件重复');
+      focus.push(event);
     }
+    const body = {
+      ...brief,
+      summary: {
+        text: briefText(brief, focus),
+        method: '规则统计 + 模型 ' + llm.model + ' 选取重点事件',
+        template: brief.summary.text,
+        focusIds: focus.map((e) => e.id),
+      },
+    };
+    return { ...body, trace: [briefStep(body)] };
   } catch (error) {
-    note = `模型调用失败（${error.name === 'TimeoutError' ? '超时' : error.message}）`;
+    note = `模型摘要未采用（${error.name === 'TimeoutError' ? '超时' : error.message}）`;
   }
   const body = {
     ...brief,

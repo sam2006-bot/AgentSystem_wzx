@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { inconclusivePhoto } from './evidence.mjs';
 
 export const config = JSON.parse(
   readFileSync(new URL('./config.json', import.meta.url)),
@@ -92,6 +93,14 @@ export function locatePlace(text) {
   return { place: '', kind: '' };
 }
 export const extractPlace = (text) => locatePlace(text).place;
+
+// 仅填写地址或写“见图”时，两者都不构成独立的故障描述。
+export function hasCitizenDescription(input) {
+  const text = halfWidth(input.text).replace(/\s+/g, '');
+  const place = halfWidth(input.location).replace(/\s+/g, '') || extractPlace(text);
+  const remainder = text.replace(place, '').replace(/[：:，,。！!]/g, '');
+  return !/^(?:(?:位置|地点|地址)(?:是|在)?|位于|在|见图|如图|详见照片|现场照片)*$/.test(remainder);
+}
 // 「门口」「路边」「这条路」这类说法不能作为位置
 export const isVaguePlace = (s) =>
   !s ||
@@ -178,8 +187,13 @@ export function extractIssues(input, evidence = {}) {
               `沿用同一描述中的${inherited.kind}「${inherited.place}」`,
             ]
           : [0, '未提取到位置'];
-  const sources = clauses.map((clause) => ({ clause, visual: false }));
-  if (evidence.text) sources.push({ clause: evidence.text, visual: true });
+  const uncertain = inconclusivePhoto(evidence);
+  const sources =
+    uncertain && !hasCitizenDescription(input)
+      ? []
+      : clauses.map((clause) => ({ clause, visual: false }));
+  if (evidence.text && !uncertain)
+    sources.push({ clause: evidence.text, visual: true });
   const found = new Map();
   const notes = [];
   const live = [];
@@ -626,29 +640,38 @@ export function generateBrief(
   return body;
 }
 
-export function briefText(b) {
+export function briefText(b, focus = []) {
   const out = [];
   const diff = b.reports - b.previous.reports;
   out.push(
     `本期共收到 ${b.reports} 条上报，归并为 ${b.events.length} 个独立事件，其中补充线索 ${b.supplements} 条` +
       (b.previous.reports
         ? `；上报量较上期 ${b.previous.reports} 条` +
-          (diff > 0 ? `增加 ${diff} 条` : diff < 0 ? `减少 ${-diff} 条` : '持平')
+          (diff > 0
+            ? `增加 ${diff} 条`
+            : diff < 0
+              ? `减少 ${-diff} 条`
+              : '持平')
         : '；上期无上报') +
       '。',
   );
-  out.push(
-    b.urgentEvents.length
-      ? `紧急事件 ${b.urgentEvents.length} 件：` +
-          b.urgentEvents
-            .map(
-              (e) =>
-                `E-${e.id} ${e.type}（${e.location || '位置待核实'}，${e.status}），建议${e.advice}`,
-            )
-            .join('；') +
-          '。'
-      : '本期无紧急事件。',
+  const describe = (e) =>
+    `E-${e.id} ${e.type}（${e.location || '位置待核实'}，${e.status}），建议${ruleOf(e.type)?.advice || '核实现场情况'}`;
+  if (focus.length)
+    out.push('重点关注：' + focus.map(describe).join('；') + '。');
+  const remaining = b.urgentEvents.filter(
+    (e) => !focus.some((f) => f.id === e.id),
   );
+  if (b.urgentEvents.length) {
+    out.push(
+      `紧急事件 ${b.urgentEvents.length} 件` +
+        (remaining.length
+          ? (focus.length ? '。另列紧急事项：' : '：') +
+            remaining.map(describe).join('；')
+          : '') +
+        '。',
+    );
+  } else out.push('本期无紧急事件。');
   const hot = b.hotspots.filter((h) => h.events >= 2);
   out.push(
     hot.length

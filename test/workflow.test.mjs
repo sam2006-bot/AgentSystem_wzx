@@ -107,11 +107,17 @@ test('视觉接口使用原始像素并保留模型来源', async () => {
           Buffer.from('photo').toString('base64'),
         ]);
         return Response.json({
-          message: { content: JSON.stringify({ observation: '树枝断裂悬挂' }) },
+          message: {
+            content: JSON.stringify({
+              observation: '树枝断裂悬挂',
+              visibleFault: true,
+            }),
+          },
         });
       },
     },
   );
   assert.equal(evidence.text, '树枝断裂悬挂');
+  assert.equal(evidence.visibleFault, true);
   assert.match(evidence.status, /test/);
 });

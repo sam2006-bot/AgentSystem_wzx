@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { config, levels, matchEvents, generateBrief } from './agents.mjs';
-import { cleanGeo, readExifGps } from './evidence.mjs';
+import { cleanGeo, readExifGps, inconclusivePhoto } from './evidence.mjs';
 import { planReport, dedupStep, briefStep } from './orchestrator.mjs';
 
 export class Store {
@@ -114,7 +114,10 @@ export class Store {
           photoReview:
             !e.reviewed &&
             data.some(
-              (i) => i.mime && !i.evidence.status.startsWith('模型观察'),
+              (i) =>
+                i.mime &&
+                (inconclusivePhoto(i.evidence) ||
+                  !i.evidence.status.startsWith('模型观察')),
             ),
           // 文本模型推断的类型、位置或紧急等级须经管理员确认
           modelReview: !e.reviewed && data.some((i) => i.inferred?.length),
@@ -390,7 +393,18 @@ export class Store {
   }
   inbox() {
     return this.all('SELECT id,time,body FROM briefs ORDER BY id DESC').map(
-      ({ body, ...r }) => ({ ...JSON.parse(body), ...r }),
+      ({ body, ...row }) => {
+        const brief = JSON.parse(body);
+        if (brief.summary?.template && !brief.summary.focusIds) {
+          brief.summary = {
+            text: brief.summary.template,
+            method: '规则模板',
+            note: '旧版模型摘要未经逐事件核对，展示生成时保存的模板摘要',
+          };
+          brief.trace = [briefStep(brief)];
+        }
+        return { ...brief, ...row };
+      },
     );
   }
   daily() {

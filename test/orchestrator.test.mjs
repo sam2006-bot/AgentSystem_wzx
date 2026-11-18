@@ -13,6 +13,63 @@ import {
 } from '../orchestrator.mjs';
 
 const none = { status: '无图片', text: '' };
+const unclear = {
+  status: '模型观察 · test',
+  text: '可见的公共设施：井盖。可见故障：无。危险：无。',
+  visibleFault: false,
+};
+
+test('无可见故障的照片保留原图和位置，复核前不能派单', async () => {
+  const db = new Store(':memory:');
+  const calls = [];
+  const model = fakeModel(
+    { issues: [{ type: '井盖缺失', reason: '根据地址猜测' }] },
+    calls,
+  );
+  for (const text of ['', '康宁路18号门口']) {
+    const input = { location: '康宁路18号门口', text };
+    const planned = await prepareReport(input, unclear, model);
+    assert.equal(planned[0].type, '待识别问题');
+    assert.equal(planned[0].location, input.location);
+    const photo = { mime: 'image/jpeg', bytes: Buffer.from('test') };
+    const id = db.submit(input, unclear, photo, planned).events[0];
+    assert.equal(db.detail(id).photoReview, true);
+    assert.equal(db.detail(id).items[0].evidence.text, unclear.text);
+    assert.throws(() => db.dispatch(id, '市政'), /核对/);
+    db.review(id, '市政', input.location, '较急', '道路破损');
+    assert.equal(db.dispatch(id, '市政').department, '市政');
+  }
+  assert.equal(calls.length, 0);
+  const [reported] = await prepareReport(
+    { text: '人民路3号路灯不亮' },
+    unclear,
+    model,
+  );
+  assert.equal(reported.type, '路灯故障');
+});
+
+test('简报拒绝错配的编号、地点、类型和模型自由改写的事件', async () => {
+  const db = new Store(':memory:');
+  const id = db.submit({ text: '康宁路18号井盖缺失' }, none).events[0];
+  db.review(id, '市政', '康宁路18号', '紧急', '道路破损');
+  db.submit({ text: '中山路88号井盖破了，小孩差点掉下去' }, none);
+  const brief = db.brief(0, Date.now() + 1000);
+  const fact = { id, location: '康宁路18号', type: '道路破损' };
+  for (const reply of [
+    { summary: '本期康宁路18号和中山路88号分别发生井盖破损事件，建议核实。' },
+    { focus: [{ ...fact, id: 2 }] },
+    { focus: [{ ...fact, location: '中山路88号' }] },
+    { focus: [{ ...fact, type: '井盖破损' }] },
+    { focus: [{ ...fact, id: 88 }] },
+  ]) {
+    const result = await narrateBrief(brief, fakeModel(reply));
+    assert.equal(result.summary.text, brief.summary.text);
+    assert.ok(result.summary.note);
+  }
+  const result = await narrateBrief(brief, fakeModel({ focus: [fact] }));
+  assert.match(result.summary.method, /fake-7b/);
+  assert.match(result.summary.text, /E-1 道路破损（康宁路18号/);
+});
 const HOUR = 3600000;
 
 // 模拟本机 Ollama：记录请求并返回给定的结构化结果
@@ -65,6 +122,24 @@ test('四个 Agent 输出统一的结论、置信度、依据和方法', () => {
   ).events[0];
   assert.equal(again, id);
   assert.match(db.detail(id).items[1].trace[2].summary, /关联到在办事件 E-/);
+});
+
+test('旧版模型简报在收件箱中展示同一时点的模板快照', () => {
+  const db = new Store(':memory:');
+  db.submit({ text: '康宁路18号路面破损' }, none);
+  const brief = db.brief(0, Date.now() + 1000);
+  db.updateBrief({
+    ...brief,
+    summary: {
+      text: '康宁路18号发生井盖缺失。',
+      template: brief.summary.text,
+      method: '规则统计 + 模型 test 撰写摘要',
+    },
+  });
+  const [stored] = db.inbox();
+  assert.equal(stored.summary.text, brief.summary.text);
+  assert.match(stored.summary.note, /旧版/);
+  assert.equal(stored.trace[0].method, '规则模板');
 });
 
 test('归属研判独立于线索解析：台账优先，职责外类型交人工', () => {
@@ -237,42 +312,57 @@ test('简报包含高发地点、上期对比、超时督办和紧急事项处�
   assert.equal(brief.trace[0].agent, '简报生成');
 });
 
-test('模型撰写的摘要只能使用统计中的数字', async () => {
+test('模型选取重点时由程序填写统计，保留模板和失败原因', async () => {
   const db = new Store(':memory:');
   db.submit({ text: '中山路井盖丢了，小孩差点掉下去' }, none);
   const brief = db.brief(0, Date.now() + 1000);
   const ok = await narrateBrief(
     brief,
-    fakeModel({
-      summary:
-        '本期收到 1 条上报，形成 1 个独立事件。E-1 中山路井盖缺失属紧急事项，建议立即设置围挡并通知市政抢修。',
-    }),
+    fakeModel({ focus: [{ id: 1, location: '中山路', type: '井盖缺失' }] }),
   );
-  assert.equal(ok.summary.method, '规则统计 + 模型 fake-7b 撰写摘要');
+  assert.equal(ok.summary.method, '规则统计 + 模型 fake-7b 选取重点事件');
   assert.equal(ok.summary.template, brief.summary.text);
-  assert.match(ok.trace[0].evidence.join(), /数字均已与统计核对/);
+  assert.match(ok.trace[0].evidence.join(), /数字由程序填入/);
   const invented = await narrateBrief(
     brief,
-    fakeModel({ summary: '本期收到 1 条上报，较上期增长 35%，需重点关注中山路的安全隐患。' }),
+    fakeModel({
+      summary:
+        '本期收到 1 条上报，较上期增长 35%，需重点关注中山路的安全隐患。',
+    }),
   );
   assert.equal(invented.summary.text, brief.summary.text);
-  assert.match(invented.summary.note, /百分比/);
+  assert.match(invented.summary.note, /未按格式/);
   // 统计时段里的时间数字不能为编造的数字放行
-  const facts = { 统计时段: '2026/11/18 16:35:00 至 2026/11/19 00:00:00', 上报条数: 1 };
+  const facts = {
+    统计时段: '2026/11/18 16:35:00 至 2026/11/19 00:00:00',
+    上报条数: 1,
+  };
   assert.match(
-    checkSummary('本期收到 1 条上报，其中 35 条来自中山路，需重点关注安全隐患。', facts),
+    checkSummary(
+      '本期收到 1 条上报，其中 35 条来自中山路，需重点关注安全隐患。',
+      facts,
+    ),
     /统计中没有的数字「35」/,
   );
   assert.equal(
-    checkSummary('2026/11/18 16:35:00 起本期收到 1 条上报，需重点关注安全隐患。', facts),
+    checkSummary(
+      '2026/11/18 16:35:00 起本期收到 1 条上报，需重点关注安全隐患。',
+      facts,
+    ),
     '',
   );
   assert.match(
-    checkSummary('11月20日前本期收到 1 条上报，需重点关注中山路的安全隐患。', facts),
+    checkSummary(
+      '11月20日前本期收到 1 条上报，需重点关注中山路的安全隐患。',
+      facts,
+    ),
     /日期「11月20日」/,
   );
   assert.match(
-    checkSummary('本期收到三条上报，形成一个独立事件，请尽快处置相关隐患。', {}),
+    checkSummary(
+      '本期收到三条上报，形成一个独立事件，请尽快处置相关隐患。',
+      {},
+    ),
     /中文数字/,
   );
   const failed = await narrateBrief(brief, fakeModel(Error('连接被拒绝')));
@@ -287,10 +377,15 @@ test('上报与简报接口经过编排层调用文本模型', async (t) => {
     body.format.properties.issues
       ? {
           issues: [
-            { type: '交通设施损坏', location: '', urgency: '较急', reason: '石墩被撞歪' },
+            {
+              type: '交通设施损坏',
+              location: '',
+              urgency: '较急',
+              reason: '石墩被撞歪',
+            },
           ],
         }
-      : { summary: '本期收到 1 条上报，形成 1 个独立事件，另有 1 件需人工复核，请尽快核对。' },
+      : { focus: [{ id: 1, location: '解放路路口', type: '交通设施损坏' }] },
   );
   const server = makeServer(db, 'operator', async () => none, llm);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
