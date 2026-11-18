@@ -1,13 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
-import {
-  config,
-  levels,
-  parseClue,
-  matchEvents,
-  generateBrief,
-} from './agents.mjs';
+import { config, levels, matchEvents, generateBrief } from './agents.mjs';
 import { cleanGeo, readExifGps } from './evidence.mjs';
+import { planReport, dedupStep, briefStep } from './orchestrator.mjs';
 
 export class Store {
   constructor(filename) {
@@ -121,6 +116,8 @@ export class Store {
             data.some(
               (i) => i.mime && !i.evidence.status.startsWith('模型观察'),
             ),
+          // 文本模型推断的类型、位置或紧急等级须经管理员确认
+          modelReview: !e.reviewed && data.some((i) => i.inferred?.length),
         };
       })
       .sort((a, b) => b.last - a.last || b.id - a.id);
@@ -149,7 +146,9 @@ export class Store {
       order: this.one('SELECT * FROM orders WHERE event=?', id) || null,
     };
   }
-  submit(input, evidence, photo = null) {
+  // planned：编排层 prepareReport 的结果（已完成解析与归属研判）；
+  // 未提供时按规则同步解析
+  submit(input, evidence, photo = null, planned = null) {
     return this.tx(() => {
       const old = this.receipt(input.requestId);
       if (old) return old;
@@ -177,7 +176,7 @@ export class Store {
       );
       const ids = [];
       const history = this.events();
-      const issues = parseClue(input, evidence);
+      const issues = planned || planReport(input, evidence);
       // 一条上报含多个不同位置时，无法确定坐标对应哪一处
       const located =
         new Set(issues.map((i) => i.location)).size === 1 ? geo : null;
@@ -201,10 +200,15 @@ export class Store {
           'INSERT INTO items(event,reportId,analysis,supplement) VALUES(?,?,?,?)',
           id,
           reportId,
-          JSON.stringify({ ...issue, geo: located, link: match.link }),
+          JSON.stringify({
+            ...issue,
+            geo: located,
+            link: match.link,
+            trace: [...issue.trace, dedupStep(match)],
+          }),
           match.target ? 1 : 0,
         );
-        if (match.target && photo)
+        if (match.target && (photo || issue.inferred?.length))
           this.run('UPDATE events SET reviewed=0 WHERE id=?', id);
         if (match.target && issue.urgency === '紧急')
           this.run('UPDATE events SET manualUrgency=NULL WHERE id=?', id);
@@ -288,10 +292,11 @@ export class Store {
         e.candidates.length ||
         !e.location ||
         e.photoReview ||
+        e.modelReview ||
         e.type === '待识别问题' ||
         !config.departments.includes(e.department)
       )
-        throw Error('请先核对图片、类型、位置、归属和疑似重复事项');
+        throw Error('请先核对图片、模型推断、类型、位置、归属和疑似重复事项');
       if (department !== e.department) throw Error('请先复核主责部门');
       this.run(
         'INSERT INTO orders(event,department,time) VALUES(?,?,?)',
@@ -362,8 +367,12 @@ export class Store {
       throw Error('请选择有效的起止时间');
     return this.tx(() => {
       const items = this.items();
-      const body = generateBrief(items, this.events(items), start, end);
       const time = Date.now();
+      const body = generateBrief(items, this.events(items), start, end, {
+        orders: this.all('SELECT event,time FROM orders'),
+        now: time,
+      });
+      body.trace = [briefStep(body)];
       const id = Number(
         this.run(
           'INSERT INTO briefs(time,body,period) VALUES(?,?,?)',
@@ -375,12 +384,17 @@ export class Store {
       return { ...body, id, time };
     });
   }
+  updateBrief({ id, time, ...body }) {
+    this.run('UPDATE briefs SET body=? WHERE id=?', JSON.stringify(body), id);
+    return { ...body, id, time };
+  }
   inbox() {
     return this.all('SELECT id,time,body FROM briefs ORDER BY id DESC').map(
       ({ body, ...r }) => ({ ...JSON.parse(body), ...r }),
     );
   }
   daily() {
+    const created = [];
     const days = this.all(
       "SELECT DISTINCT date(time/1000,'unixepoch','localtime') AS day FROM reports EXCEPT SELECT period FROM briefs WHERE period IS NOT NULL",
     );
@@ -388,7 +402,8 @@ export class Store {
       const start = new Date(day + 'T00:00:00'),
         end = new Date(start);
       end.setDate(end.getDate() + 1);
-      if (+end <= Date.now()) this.brief(+start, +end, day);
+      if (+end <= Date.now()) created.push(this.brief(+start, +end, day));
     }
+    return created;
   }
 }

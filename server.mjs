@@ -6,6 +6,8 @@ import path from 'node:path';
 import { Store } from './store.mjs';
 import { parseClue, config } from './agents.mjs';
 import { analyzePhoto, cleanGeo, decodePhoto } from './evidence.mjs';
+import { llmOptions } from './llm.mjs';
+import { prepareReport, narrateBrief } from './orchestrator.mjs';
 
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
 const assets = {
@@ -52,7 +54,14 @@ function field(obj, name, limit) {
     throw Error('输入字段类型或长度不正确');
   return value.trim();
 }
-export function makeServer(db, key, vision = analyzePhoto) {
+// 简报统计在事务内同步生成；配置了文本模型时再请模型撰写摘要
+export async function finishBrief(db, brief, llm) {
+  if (!llm.model) return brief;
+  return db.updateBrief(await narrateBrief(brief, llm));
+}
+
+// llm：文本模型配置 { model, url, fetch? }；model 为空时只用规则
+export function makeServer(db, key, vision = analyzePhoto, llm = llmOptions()) {
   const pending = new Map();
   return http.createServer(async (req, res) => {
     try {
@@ -92,7 +101,8 @@ export function makeServer(db, key, vision = analyzePhoto) {
           });
         try {
           const evidence = await vision(photo);
-          return send(res, 201, db.submit(clue, evidence, photo));
+          const planned = await prepareReport(clue, evidence, llm);
+          return send(res, 201, db.submit(clue, evidence, photo, planned));
         } finally {
           pending.delete(alertId);
         }
@@ -125,7 +135,7 @@ export function makeServer(db, key, vision = analyzePhoto) {
       }
       if (method === 'POST' && p === '/api/briefs') {
         const { start, end } = await body(req);
-        return send(res, 201, db.brief(start, end));
+        return send(res, 201, await finishBrief(db, db.brief(start, end), llm));
       }
       const route = p.match(
         /^\/api\/events\/(\d+)(?:\/(review|dispatch|close|merge|split))?$/,
@@ -189,24 +199,30 @@ if (
     });
   const key = process.env.ADMIN_KEY || readFileSync(keyPath, 'utf8').trim();
   const db = new Store(path.join(dir, 'facilities.sqlite'));
-  db.daily();
-  const timer = setInterval(() => {
+  const llm = llmOptions();
+  const daily = () => {
     try {
-      db.daily();
+      for (const brief of db.daily())
+        finishBrief(db, brief, llm).catch((error) =>
+          console.error('日报摘要生成失败', error.message),
+        );
     } catch (error) {
       console.error('日报生成失败', error.message);
     }
-  }, 60000);
-  timer.unref();
+  };
+  daily();
+  setInterval(daily, 60000).unref();
   const port = Number(process.env.PORT || 4317);
-  makeServer(db, key).listen(port, '127.0.0.1', () =>
+  makeServer(db, key, analyzePhoto, llm).listen(port, '127.0.0.1', () =>
     console.log(
       '市民上报 http://127.0.0.1:' +
         port +
         '/\n管理员 http://127.0.0.1:' +
         port +
         '/admin\n口令来源 ' +
-        (process.env.ADMIN_KEY ? 'ADMIN_KEY' : keyPath),
+        (process.env.ADMIN_KEY ? 'ADMIN_KEY' : keyPath) +
+        '\n文本模型 ' +
+        (llm.model || '未配置（仅使用规则）'),
     ),
   );
 }
