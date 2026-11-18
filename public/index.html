@@ -1,117 +1,247 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="govuk-template">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>市民上报 · 城市设施服务站</title>
-    <link rel="stylesheet" href="/style.css" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>报告公共设施问题 - 城市设施服务站</title>
+    <link rel="stylesheet" href="/vendor/govuk/govuk-frontend.min.css" />
+    <link rel="stylesheet" href="/app.css" />
   </head>
-  <body>
-    <header>
-      <div class="bar">
-        <a class="brand" href="/"
-          ><span class="brandmark" aria-hidden="true"
-            ><i></i><i></i><i></i></span
-          >城市设施服务站</a
-        >
-        <nav>
-          <a href="/" aria-current="page">市民上报</a
-          ><a href="/admin">管理工作台</a>
-        </nav>
-      </div>
-    </header>
-    <main>
-      <section class="pagehead">
-        <div class="eyeline"><i></i> 市民服务</div>
-        <h1>公共设施线索上报</h1>
-        <p>记录现场情况，帮助工作人员定位、研判并处理设施问题。</p>
-      </section>
-      <div class="layout">
-        <form id="report" class="panel formcard">
-          <div class="sectionhead">
-            <h2>现场信息</h2>
-            <small>文字描述、现场照片至少填写一项</small>
-          </div>
-          <label for="description">问题描述</label
-          ><textarea
-            id="description"
-            maxlength="3000"
-            rows="4"
-            placeholder="例如：人民路与建设路交叉口东侧，机动车道上的井盖缺失。"
-          ></textarea>
-          <div class="twocol">
-            <div>
-              <label for="location">发生位置</label
-              ><input
-                id="location"
-                maxlength="150"
-                placeholder="街道、路口及具体方位"
-              />
-            </div>
-            <div>
-              <label for="asset">设施编号 <small>选填</small></label
-              ><input id="asset" maxlength="50" placeholder="例如 L-023" />
-            </div>
-          </div>
-          <label for="photo">现场照片 <small>选填</small></label>
-          <div class="upload">
-            <b aria-hidden="true">＋</b>
-            <div>
-              <strong>选择现场照片</strong
-              ><small>JPG、PNG 或 WebP，最大 5 MB</small>
-            </div>
-            <input
-              id="photo"
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-            />
-          </div>
-          <label class="check" for="useGeo"
-            ><input id="useGeo" type="checkbox" /> 附带当前定位
-            <small>仅用于判断是否为同一地点，可不勾选</small></label
-          >
-          <div id="preview" hidden>
-            <img id="thumb" alt="待提交现场照片" /><button
-              type="button"
-              id="remove"
-              class="quiet"
+  <body class="govuk-template__body">
+    <script src="/supported.js"></script>
+    <a href="#main-content" class="govuk-skip-link" data-module="govuk-skip-link"
+      >跳到正文</a
+    >
+    <header class="govuk-template__header">
+      <div class="govuk-generic-header">
+        <div class="govuk-generic-header__container govuk-width-container">
+          <div class="govuk-generic-header__logo">
+            <a href="/" class="govuk-generic-header__homepage-link"
+              >城市设施服务站</a
             >
-              移除照片
-            </button>
           </div>
-          <div class="actions">
-            <span id="status" class="message" role="status"></span
-            ><button class="primary" type="submit">
-              提交线索 <span aria-hidden="true">↗</span>
-            </button>
-          </div>
-        </form>
-        <aside>
-          <section class="guide">
-            <div class="eyeline"><i></i> 处理流程</div>
-            <h2>提交之后</h2>
-            <ol class="timeline">
-              <li>
-                <strong>识别问题</strong>
-                <p>提取设施类型、位置及紧急等级。</p>
-              </li>
-              <li>
-                <strong>研判与查重</strong>
-                <p>匹配职能部门，将同一故障的补充线索关联到事件。</p>
-              </li>
-              <li>
-                <strong>管理员确认</strong>
-                <p>核对证据、确认派单，并汇总当期研判简报。</p>
-              </li>
-            </ol>
-          </section>
-          <section class="panel receipt" id="receipt" hidden aria-live="polite">
-            <h2>上报回执</h2>
-            <p id="receiptText"></p>
-          </section>
-        </aside>
+        </div>
       </div>
-    </main>
+      <section
+        aria-label="服务名称"
+        class="govuk-service-navigation"
+        data-module="govuk-service-navigation"
+      >
+        <div class="govuk-width-container">
+          <div class="govuk-service-navigation__container">
+            <span class="govuk-service-navigation__service-name">
+              <a href="/" class="govuk-service-navigation__link"
+                >公共设施问题上报</a
+              >
+            </span>
+          </div>
+        </div>
+      </section>
+    </header>
+    <div class="govuk-width-container">
+      <main class="govuk-main-wrapper" id="main-content">
+        <div class="govuk-grid-row">
+          <div class="govuk-grid-column-two-thirds">
+            <div id="reportView">
+              <div id="errors"></div>
+              <h1 class="govuk-heading-l">报告公共设施问题</h1>
+              <p class="govuk-body">
+                井盖、路灯、交通设施、行道树等出现损坏或故障，可以在这里告诉我们。工作人员核对后，会交给负责的部门处理。
+              </p>
+              <div class="govuk-warning-text">
+                <span class="govuk-warning-text__icon" aria-hidden="true"
+                  >!</span
+                >
+                <strong class="govuk-warning-text__text">
+                  <span class="govuk-visually-hidden">注意</span>
+                  如有人员受伤或危险正在发生，请先拨打 110、119 或 120。
+                </strong>
+              </div>
+              <form id="report" novalidate>
+                <div
+                  class="govuk-form-group govuk-character-count"
+                  data-module="govuk-character-count"
+                  data-maxlength="3000"
+                  data-i18n.characters-under-limit.other="还可以输入 %{count} 字"
+                  data-i18n.characters-at-limit="已达到 3000 字上限"
+                  data-i18n.characters-over-limit.other="已超出 %{count} 字"
+                  data-i18n.textarea-description.other="最多可输入 %{count} 字"
+                >
+                  <label class="govuk-label govuk-label--s" for="description"
+                    >问题描述</label
+                  >
+                  <div id="description-hint" class="govuk-hint">
+                    写清楚是什么设施、出了什么问题。例如：机动车道上的井盖缺失。如果上传了照片，也可以不填。
+                  </div>
+                  <textarea
+                    class="govuk-textarea govuk-js-character-count"
+                    id="description"
+                    name="description"
+                    rows="5"
+                    aria-describedby="description-info description-hint"
+                  ></textarea>
+                  <div
+                    id="description-info"
+                    class="govuk-hint govuk-character-count__message"
+                  >
+                    最多可输入 3000 字
+                  </div>
+                </div>
+
+                <div class="govuk-form-group">
+                  <label class="govuk-label govuk-label--s" for="location"
+                    >发生位置</label
+                  >
+                  <div id="location-hint" class="govuk-hint">
+                    街道、路口和具体方位，或附近的门牌号。例如：人民路与建设路交叉口东侧。
+                  </div>
+                  <input
+                    class="govuk-input"
+                    id="location"
+                    name="location"
+                    type="text"
+                    maxlength="150"
+                    aria-describedby="location-hint"
+                  />
+                </div>
+
+                <div class="govuk-form-group">
+                  <label class="govuk-label govuk-label--s" for="asset"
+                    >设施编号（选填）</label
+                  >
+                  <div id="asset-hint" class="govuk-hint">
+                    井盖、路灯、消火栓等设施上通常印有编号，例如 L-023。
+                  </div>
+                  <input
+                    class="govuk-input govuk-input--width-10"
+                    id="asset"
+                    name="asset"
+                    type="text"
+                    maxlength="50"
+                    spellcheck="false"
+                    aria-describedby="asset-hint"
+                  />
+                </div>
+
+                <div class="govuk-form-group">
+                  <label class="govuk-label govuk-label--s" for="photo"
+                    >现场照片（选填）</label
+                  >
+                  <div id="photo-hint" class="govuk-hint">
+                    JPG、PNG 或 WebP 格式，不超过 5 MB。
+                  </div>
+                  <div
+                    class="govuk-file-upload-wrapper"
+                    data-module="govuk-file-upload"
+                    data-i18n.choose-files-button="选择照片"
+                    data-i18n.no-file-chosen="未选择照片"
+                    data-i18n.multiple-files-chosen.other="已选择 %{count} 张照片"
+                    data-i18n.drop-instruction="或将照片拖到这里"
+                    data-i18n.entered-drop-zone="已进入拖放区域"
+                    data-i18n.left-drop-zone="已离开拖放区域"
+                  >
+                    <input
+                      class="govuk-file-upload"
+                      id="photo"
+                      name="photo"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      aria-describedby="photo-hint"
+                    />
+                  </div>
+                  <div id="preview" class="app-photo-preview" hidden>
+                    <img id="thumb" alt="已选择的现场照片" />
+                    <p class="govuk-body">
+                      <button type="button" id="remove" class="app-link-button">
+                        移除照片
+                      </button>
+                    </p>
+                  </div>
+                </div>
+
+                <div class="govuk-form-group">
+                  <fieldset class="govuk-fieldset">
+                    <legend class="govuk-fieldset__legend govuk-fieldset__legend--s">
+                      当前位置
+                    </legend>
+                    <div class="govuk-checkboxes" data-module="govuk-checkboxes">
+                      <div class="govuk-checkboxes__item">
+                        <input
+                          class="govuk-checkboxes__input"
+                          id="useGeo"
+                          name="useGeo"
+                          type="checkbox"
+                          aria-describedby="useGeo-hint"
+                        />
+                        <label
+                          class="govuk-label govuk-checkboxes__label"
+                          for="useGeo"
+                          >附带我现在的定位</label
+                        >
+                        <div
+                          id="useGeo-hint"
+                          class="govuk-hint govuk-checkboxes__hint"
+                        >
+                          仅用于判断是否有人报告过同一地点的问题。浏览器会先询问你是否允许。
+                        </div>
+                      </div>
+                    </div>
+                  </fieldset>
+                </div>
+
+                <button
+                  type="submit"
+                  class="govuk-button"
+                  data-module="govuk-button"
+                >
+                  提交
+                </button>
+                <p
+                  id="status"
+                  class="govuk-body govuk-hint"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+              </form>
+            </div>
+
+            <div id="doneView" hidden>
+              <div class="govuk-panel govuk-panel--confirmation">
+                <h1 class="govuk-panel__title" id="doneTitle" tabindex="-1">
+                  问题已提交
+                </h1>
+                <div class="govuk-panel__body">
+                  线索编号<br /><strong id="receiptId"></strong>
+                </div>
+              </div>
+              <p class="govuk-body" id="receiptEvents"></p>
+              <h2 class="govuk-heading-m">接下来会怎样</h2>
+              <p class="govuk-body">
+                工作人员会核对你提供的描述、位置和照片，确认后交给负责的部门处理。
+              </p>
+              <p class="govuk-body">
+                如果其他人也报告了同一个问题，我们会把这些线索合并到同一个事件中处理。
+              </p>
+              <p class="govuk-body">
+                <a href="/" class="govuk-link">报告另一个问题</a>
+              </p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+    <footer class="govuk-footer">
+      <div class="govuk-width-container">
+        <div class="govuk-footer__meta">
+          <div class="govuk-footer__meta-item govuk-footer__meta-item--grow">
+            城市设施服务站
+          </div>
+        </div>
+      </div>
+    </footer>
     <script type="module" src="/citizen.js"></script>
   </body>
 </html>

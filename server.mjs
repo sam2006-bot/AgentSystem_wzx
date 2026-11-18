@@ -1,6 +1,12 @@
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  existsSync,
+} from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Store } from './store.mjs';
@@ -10,13 +16,27 @@ import { llmOptions } from './llm.mjs';
 import { prepareReport, narrateBrief } from './orchestrator.mjs';
 
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
-const assets = {
-  '/': ['index.html', 'text/html'],
-  '/admin': ['admin.html', 'text/html'],
-  '/style.css': ['style.css', 'text/css'],
-  '/citizen.js': ['citizen.js', 'text/javascript'],
-  '/admin.js': ['admin.js', 'text/javascript'],
+const types = {
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'text/javascript',
+  '.svg': 'image/svg+xml',
 };
+// 只提供白名单内的静态文件；public/vendor/ 下的第三方库按扩展名登记
+const assets = {
+  '/': 'index.html',
+  '/admin': 'admin.html',
+  '/app.css': 'app.css',
+  '/supported.js': 'supported.js',
+  '/citizen.js': 'citizen.js',
+  '/admin.js': 'admin.js',
+};
+for (const file of readdirSync(path.join(publicDir, 'vendor'), {
+  recursive: true,
+})) {
+  const name = path.join('vendor', file).split(path.sep).join('/');
+  if (Object.hasOwn(types, path.extname(name))) assets['/' + name] = name;
+}
 function send(res, status, body, type = 'application/json') {
   res.writeHead(status, {
     'Content-Type': type + (type.startsWith('image/') ? '' : '; charset=utf-8'),
@@ -69,8 +89,13 @@ export function makeServer(db, key, vision = analyzePhoto, llm = llmOptions()) {
         p = url.pathname,
         method = req.method;
       if (method === 'GET' && Object.hasOwn(assets, p)) {
-        const [name, type] = assets[p];
-        return send(res, 200, readFileSync(path.join(publicDir, name)), type);
+        const name = assets[p];
+        return send(
+          res,
+          200,
+          readFileSync(path.join(publicDir, name)),
+          types[path.extname(name)],
+        );
       }
       if (!p.startsWith('/api/'))
         return send(res, 404, { error: '页面不存在' });

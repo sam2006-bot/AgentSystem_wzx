@@ -1,6 +1,6 @@
 # 城市公共设施线索研判系统
 
-市民上传文字和现场照片后，系统提取设施故障、位置和紧急等级，建议主责部门，并将同一故障的多次上报关联到一个事件。管理员可以在同一页面核对原图、确认派单，并从研判简报追溯到每条原始线索。
+市民上传文字和现场照片后，系统提取设施故障、位置和紧急等级，建议主责部门，并将同一故障的多次上报关联到一个事件。管理员可以在事件页核对原图、确认派单，并从研判简报追溯到每条原始线索。
 
 例如，两位市民先后报告同一编号的井盖缺失，后台会保留两份上报证据，并为该事件生成一张主工单。附近人行道上的断枝会单独建档，交由园林部门研判。
 
@@ -14,15 +14,15 @@ cd AgentSystem_wzx
 node server.mjs
 ```
 
-1. 在运行服务的电脑上打开 [市民上报页](http://127.0.0.1:4317/)，填写问题描述或上传照片。补充路口方位、门牌或设施编号，或勾选「附带当前定位」，都有助于查重。
+1. 在运行服务的电脑上打开 [市民上报页](http://127.0.0.1:4317/)，填写问题描述或上传照片。补充路口方位、门牌或设施编号，或勾选「附带我现在的定位」，都有助于查重。
 2. 打开 [管理员工作台](http://127.0.0.1:4317/admin)，使用首次启动时生成的 `data/admin-key.txt` 中的口令登录。
-3. 在事件详情中核对证据，确认类型、位置、部门和紧急等级后派单。在「简报收件箱」选择统计时段，即可生成并查阅简报。
+3. 在「事件队列」中打开事件，核对证据后派单。页面列出需要人工复核的原因时，先在「人工复核」中确认类型、位置、部门和紧急等级。在「简报收件箱」选择统计时段，即可生成并查阅简报。
 
 Windows 用户也可双击 [启动脚本](启动.cmd)。服务默认仅监听本机，工单和简报都保存在本地。正式接入市级平台时，需要配置当地职责清单和工单接口。
 
 ## 四个 Agent 如何协作
 
-[编排层](orchestrator.mjs)登记了每个 Agent 的职责和输入输出，并按「线索解析 → 归属研判 → 重复合并 → 入库」的顺序处理每条上报。每个 Agent 输出统一的 `{result, confidence, evidence, method}`，即结论、置信度、依据和判断方法。编排层把各步结果记入该线索的「研判过程」，管理员在事件详情中逐条查看。
+[编排层](orchestrator.mjs)登记了每个 Agent 的职责和输入输出，并按「线索解析 → 归属研判 → 重复合并 → 入库」的顺序处理每条上报。每个 Agent 输出统一的 `{result, confidence, evidence, method}`，即结论、置信度、依据和判断方法。编排层把各步结果记入该线索的「研判过程」，管理员在事件页中逐条查看。
 
 | Agent | 输入与判断 | 管理员看到的结果 |
 | --- | --- | --- |
@@ -87,6 +87,18 @@ Windows 用户也可双击 [启动脚本](启动.cmd)。服务默认仅监听本
 
 在 [config.json](config.json) 的 `assets` 中可按设施编号设置养护部门，例如 `{"L-023": "市政"}`。修改职责规则或台账后重启服务。原始照片、工单、简报和操作记录存储在业务数据库中。本地数据目录、管理员口令、模型缓存和环境变量文件已加入 Git 忽略清单。
 
+## 界面
+
+市民上报页使用 [GOV.UK Frontend](https://github.com/alphagov/govuk-frontend)，管理工作台在此基础上使用 [MOJ Frontend](https://github.com/ministryofjustice/moj-frontend) 的办件组件，如操作记录时间线、提示和徽标。两个库的预编译文件已放在 [public/vendor/](public/vendor/) 中，运行时不需要 npm 或构建步骤。
+
+升级这两个库时，修改 [scripts/vendor-frontend.mjs](scripts/vendor-frontend.mjs) 中的版本号，然后在联网环境运行：
+
+```bash
+node scripts/vendor-frontend.mjs
+```
+
+GOV.UK 的王冠标志、GOV.UK 字样和 GDS Transport 字体仅限英国政府服务使用。脚本会删除该字体并改用中文字体栈，页面也不使用带王冠的页头和页脚。
+
 ## 测试与验收
 
 在项目根目录运行自动化测试。测试使用独立数据库，其中 [parse.test.mjs](test/parse.test.mjs) 和 [dedup.test.mjs](test/dedup.test.mjs) 覆盖口语化描述的解析和多信号查重，[orchestrator.test.mjs](test/orchestrator.test.mjs) 用模拟的模型服务覆盖编排、模型补充和简报研判。
@@ -113,6 +125,7 @@ node --test
 | [agents.mjs](agents.mjs) · [llm.mjs](llm.mjs) | 各 Agent 的规则判断、简报统计；Ollama 结构化输出调用 |
 | [server.mjs](server.mjs) · [store.mjs](store.mjs) | HTTP 接口、管理员鉴权、SQLite 存储和工单事务 |
 | [evidence.mjs](evidence.mjs) · [vision/](vision/) | 图像证据处理、本地模型安装与推理 |
-| [public/](public/) · [test/](test/) | 市民及管理员界面、自动化验收用例 |
+| [public/](public/) · [scripts/](scripts/) | 市民上报页、管理工作台；第三方前端库的更新脚本 |
+| [test/](test/) | 自动化验收用例 |
 
 仓库协作者可通过 [Issues](https://github.com/sam2006-bot/AgentSystem_wzx/issues) 提交可复现的问题。项目代码采用 [MIT 许可证](LICENSE)。
