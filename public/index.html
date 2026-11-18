@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>市民上报 · 城市设施服务站</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="bar">
+        <a class="brand" href="/"
+          ><span class="brandmark" aria-hidden="true"
+            ><i></i><i></i><i></i></span
+          >城市设施服务站</a
+        >
+        <nav>
+          <a href="/" aria-current="page">市民上报</a
+          ><a href="/admin">管理工作台</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <section class="pagehead">
+        <div class="eyeline"><i></i> 市民服务</div>
+        <h1>公共设施线索上报</h1>
+        <p>记录现场情况，帮助工作人员定位、研判并处理设施问题。</p>
+      </section>
+      <div class="layout">
+        <form id="report" class="panel formcard">
+          <div class="sectionhead">
+            <h2>现场信息</h2>
+            <small>文字描述、现场照片至少填写一项</small>
+          </div>
+          <label for="description">问题描述</label
+          ><textarea
+            id="description"
+            maxlength="3000"
+            rows="4"
+            placeholder="例如：人民路与建设路交叉口东侧，机动车道上的井盖缺失。"
+          ></textarea>
+          <div class="twocol">
+            <div>
+              <label for="location">发生位置</label
+              ><input
+                id="location"
+                maxlength="150"
+                placeholder="街道、路口及具体方位"
+              />
+            </div>
+            <div>
+              <label for="asset">设施编号 <small>选填</small></label
+              ><input id="asset" maxlength="50" placeholder="例如 L-023" />
+            </div>
+          </div>
+          <label for="photo">现场照片 <small>选填</small></label>
+          <div class="upload">
+            <b aria-hidden="true">＋</b>
+            <div>
+              <strong>选择现场照片</strong
+              ><small>JPG、PNG 或 WebP，最大 5 MB</small>
+            </div>
+            <input
+              id="photo"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+            />
+          </div>
+          <div id="preview" hidden>
+            <img id="thumb" alt="待提交现场照片" /><button
+              type="button"
+              id="remove"
+              class="quiet"
+            >
+              移除照片
+            </button>
+          </div>
+          <div class="actions">
+            <span id="status" class="message" role="status"></span
+            ><button class="primary" type="submit">
+              提交线索 <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+        </form>
+        <aside>
+          <section class="guide">
+            <div class="eyeline"><i></i> 处理流程</div>
+            <h2>提交之后</h2>
+            <ol class="timeline">
+              <li>
+                <strong>识别问题</strong>
+                <p>提取设施类型、位置及紧急等级。</p>
+              </li>
+              <li>
+                <strong>研判与查重</strong>
+                <p>匹配职能部门，将同一故障的补充线索关联到事件。</p>
+              </li>
+              <li>
+                <strong>管理员确认</strong>
+                <p>核对证据、确认派单，并汇总当期研判简报。</p>
+              </li>
+            </ol>
+          </section>
+          <section class="panel receipt" id="receipt" hidden aria-live="polite">
+            <h2>上报回执</h2>
+            <p id="receiptText"></p>
+          </section>
+        </aside>
+      </div>
+    </main>
+    <script type="module" src="/citizen.js"></script>
+  </body>
+</html>

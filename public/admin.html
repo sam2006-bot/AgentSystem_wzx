@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>管理工作台 · 城市设施服务站</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="bar">
+        <a class="brand" href="/"
+          ><span class="brandmark" aria-hidden="true"
+            ><i></i><i></i><i></i></span
+          >城市设施服务站</a
+        >
+        <nav>
+          <a href="/">市民上报</a
+          ><a href="/admin" aria-current="page">管理工作台</a>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <section class="pagehead">
+        <div class="eyeline"><i></i> 后台管理</div>
+        <h1>设施研判工作台</h1>
+        <p>按事件核对原始线索、处理紧急事项，并接收研判简报。</p>
+      </section>
+      <form class="panel formcard login" id="login">
+        <h2>管理员登录</h2>
+        <label for="key">本机管理员口令</label
+        ><input
+          type="password"
+          required
+          id="key"
+          autocomplete="current-password"
+        /><small>首次启动后，可在项目的 data/admin-key.txt 中查看。</small>
+        <div class="actions"><button class="primary">进入工作台</button></div>
+      </form>
+      <p id="msg" role="status" class="message"></p>
+      <section id="work" hidden>
+        <div id="metrics" class="metrics"></div>
+        <div class="toolbar">
+          <div class="tabs">
+            <button id="showEvents" aria-pressed="true">事件队列</button
+            ><button id="showInbox" aria-pressed="false">简报收件箱</button>
+          </div>
+          <button id="logout" class="quiet">退出登录</button>
+        </div>
+        <div id="alerts"></div>
+        <div id="eventView" class="adminlayout">
+          <section class="panel queue">
+            <div class="sectionhead">
+              <h2>事件列表</h2>
+              <select id="filter" aria-label="筛选事件">
+                <option>全部事件</option>
+                <option>紧急</option>
+                <option>待复核</option>
+                <option>待确认</option>
+                <option>已派单</option>
+                <option>已办结</option>
+              </select>
+            </div>
+            <div id="events"></div>
+          </section>
+          <section id="detail" class="panel formcard"></section>
+        </div>
+        <section id="briefView" hidden>
+          <form class="panel formcard" id="briefForm">
+            <h2>生成研判简报</h2>
+            <div class="twocol">
+              <div>
+                <label for="start">开始时间</label
+                ><input id="start" type="datetime-local" required />
+              </div>
+              <div>
+                <label for="end">结束时间</label
+                ><input id="end" type="datetime-local" required />
+              </div>
+            </div>
+            <div class="actions">
+              <button class="primary">生成并提交收件箱</button>
+            </div>
+          </form>
+          <div id="inbox"></div>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>

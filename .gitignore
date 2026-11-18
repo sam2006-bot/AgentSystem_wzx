@@ -1,0 +1,9 @@
+data/
+admin-key.txt
+*.sqlite*
+node_modules/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
